@@ -104,23 +104,29 @@ def command_all(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # --output is shared by every subcommand and must be accepted *after* the
+    # subcommand name, which is the order people naturally type it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--output", default=str(DEFAULT_RESULTS), help="directory for figures and tables")
+
     parser = argparse.ArgumentParser(prog="cartpole", description="Inverted pendulum control laboratory")
-    parser.add_argument("--output", default=str(DEFAULT_RESULTS), help="directory for figures and tables")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    bench = subparsers.add_parser("bench", help="run the scenario suite and score every controller")
+    bench = subparsers.add_parser(
+        "bench", parents=[common], help="run the scenario suite and score every controller"
+    )
     bench.add_argument("--check", action="store_true", help="exit non-zero if any run fails to stabilise")
     bench.set_defaults(handler=command_bench)
 
-    robustness = subparsers.add_parser("robustness", help="sweep plant/model mismatch")
+    robustness = subparsers.add_parser("robustness", parents=[common], help="sweep plant/model mismatch")
     robustness.add_argument("--grid", type=int, default=13, help="grid resolution per axis")
     robustness.set_defaults(handler=command_robustness)
 
-    animation = subparsers.add_parser("animate", help="render the swing-up as a GIF")
+    animation = subparsers.add_parser("animate", parents=[common], help="render the swing-up as a GIF")
     animation.add_argument("--fps", type=int, default=30)
     animation.set_defaults(handler=command_animate)
 
-    everything = subparsers.add_parser("all", help="bench + robustness + animate")
+    everything = subparsers.add_parser("all", parents=[common], help="bench + robustness + animate")
     everything.add_argument("--grid", type=int, default=13)
     everything.add_argument("--fps", type=int, default=30)
     everything.add_argument("--check", action="store_true")

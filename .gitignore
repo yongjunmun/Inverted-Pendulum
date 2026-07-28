@@ -30,4 +30,5 @@ Thumbs.db
 # `python -m cartpole.cli all` and are intentionally tracked so the README
 # renders on GitHub without anyone having to run the code first.
 scratch/
+artifacts/
 *.log

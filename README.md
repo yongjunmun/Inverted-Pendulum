@@ -130,7 +130,7 @@ where $l = L/2$ and $J = m l^2 + mL^2/12$. Integrated with RK4 at 1 kHz while co
 
 ## How it is verified
 
-45 unit tests, run on Python 3.10–3.13 in CI. The interesting ones check the *mathematics*, not just
+53 unit tests, run on Python 3.10-3.13 in CI. The interesting ones check the *mathematics*, not just
 that the code runs:
 
 | Test | What it proves |
@@ -144,6 +144,7 @@ that the code runs:
 | MPC commanded force vs. box | Constraints are honoured *by the optimiser*, never by clipping |
 | Short horizon (N = 8) still stabilises | The terminal cost, not horizon length, is what buys stability |
 | Metrics on synthetic signals | The scoring code cannot flatter a controller |
+| CI workflow command vs. the CLI parser | The command in `ci.yml` is parsed by the real argument parser, so the workflow cannot drift out of sync with the code |
 
 CI additionally re-runs the whole benchmark and fails the build if any of the 13 runs stops
 stabilising, so the results table can never silently go stale.
@@ -200,7 +201,7 @@ cartpole/
   animate.py          GIF export
   cli.py              command line entry point
   controllers/        pid.py, lqr.py, mpc.py, swingup.py
-tests/                45 unit tests
+tests/                53 unit tests
 results/              committed figures and benchmark.csv
 ```
 
