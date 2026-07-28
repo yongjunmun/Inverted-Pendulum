@@ -8,7 +8,7 @@ Everything is derived and implemented from scratch in NumPy: the equations of mo
 linearisation, the matrix exponential, both Riccati solvers and the MPC quadratic program. **SciPy is
 not a dependency** — none of the control mathematics is hidden behind a library call.
 
-[![tests](https://github.com/JunMun-Yong_GHIFX/inverted-pendulum-control-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/JunMun-Yong_GHIFX/inverted-pendulum-control-lab/actions/workflows/ci.yml)
+[![tests](https://github.com/yongjunmun/Inverted-Pendulum/actions/workflows/ci.yml/badge.svg)](https://github.com/yongjunmun/Inverted-Pendulum/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![dependencies](https://img.shields.io/badge/dependencies-numpy%20%2B%20matplotlib-informational)](requirements.txt)
@@ -151,9 +151,11 @@ stabilising, so the results table can never silently go stale.
 ## Quick start
 
 ```bash
-git clone https://github.com/JunMun-Yong_GHIFX/inverted-pendulum-control-lab.git
-cd inverted-pendulum-control-lab
+git clone https://github.com/yongjunmun/Inverted-Pendulum.git
+cd Inverted-Pendulum
 pip install -r requirements.txt
+
+python run.py                         # simplest: open run.py in an editor and press Run
 
 python -m cartpole.cli bench          # scenario suite, plots, results table
 python -m cartpole.cli robustness     # 169-plant mismatch sweep (~3 min)
@@ -186,6 +188,7 @@ print(evaluate(result))
 ## Layout
 
 ```
+run.py                click-to-run entry point
 cartpole/
   dynamics.py         equations of motion, energy, analytic + numeric linearisation
   linalg.py           expm, ZOH discretisation, CARE, DARE, box-constrained QP
