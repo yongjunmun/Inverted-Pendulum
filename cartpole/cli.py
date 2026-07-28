@@ -97,6 +97,65 @@ def command_animate(args: argparse.Namespace) -> None:
     print(f"Wrote {path}")
 
 
+def command_learn(args: argparse.Namespace) -> None:
+    """Train policies, score them in the same benchmark, compare to the LQR gain."""
+    from cartpole.controllers.lqr import LQRController
+    from cartpole.learning.experiments import run_capacity_study, run_horizon_study, train_and_evaluate
+    from cartpole.learning.plotting import plot_gain_comparison, plot_horizon_study, plot_learning_curves
+    from cartpole.learning.policies import LinearPolicy
+    from cartpole.learning.rollout import TrainingConfig, evaluate as score_policy
+    from cartpole.metrics import to_markdown_table
+
+    params = CartPoleParams()
+    results_dir = Path(args.output)
+    config = TrainingConfig()
+
+    # The analytic gain, scored in the very same training environment.
+    reference = LinearPolicy(force_limit=params.force_limit)
+    reference.set_params(-LQRController(params).gain[0])
+    lqr_score = score_policy(reference, params, config, np.random.default_rng(1), episodes=20)
+    print(f"LQR reference score (0 training samples): {lqr_score:.2f}\n")
+
+    results = []
+    for algorithm in ("ARS", "CEM"):
+        print(f"training {algorithm} ...")
+        result = train_and_evaluate(algorithm, params, config, seed=args.seed)
+        results.append(result)
+
+        print(f"  score {result.training_score:8.2f}   vs LQR {lqr_score:.2f}")
+        print(f"  {result.history.total_episodes} episodes / {result.history.total_env_steps:,} env steps")
+        print(f"  benchmark {result.scenarios_passed}/4   60 s drift {result.long_run_drift_m:.3f} m")
+        if result.comparison:
+            print("  " + result.comparison.summary().replace("\n", "\n  "))
+        print()
+
+    plot_learning_curves(results, lqr_score, results_dir / "learning_curves.png")
+    plot_gain_comparison(results, results_dir / "learned_gains.png")
+
+    rows = [row for result in results for row in result.metrics]
+    print(to_markdown_table(rows))
+
+    if not args.quick:
+        print("\nhorizon study (why a short episode hides a slow instability) ...")
+        horizon = run_horizon_study(params, seed=args.seed)
+        plot_horizon_study(horizon, results_dir / "horizon_study.png")
+        for row in horizon:
+            state = "stable" if row["stabilising"] else "UNSTABLE"
+            print(
+                f"  episode {row['episode_seconds']:5.1f} s -> {state:<8} "
+                f"worst pole {row['worst_pole']:+.4f}  drift over 60 s {row['drift_60s_m']:7.2f} m"
+            )
+
+        print("\ncapacity study (does a neural policy beat a linear one?) ...")
+        for row in run_capacity_study(params, seed=args.seed):
+            print(
+                f"  {row['policy']:<24} params={row['n_params']:>4}  score={row['score']:9.2f}  "
+                f"benchmark={row['scenarios_passed']}/4"
+            )
+
+    print(f"\nWrote learning figures to {results_dir}")
+
+
 def command_all(args: argparse.Namespace) -> None:
     command_bench(args)
     command_robustness(args)
@@ -125,6 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
     animation = subparsers.add_parser("animate", parents=[common], help="render the swing-up as a GIF")
     animation.add_argument("--fps", type=int, default=30)
     animation.set_defaults(handler=command_animate)
+
+    learn = subparsers.add_parser(
+        "learn", parents=[common], help="train ARS/CEM policies and compare them to the LQR gain"
+    )
+    learn.add_argument("--seed", type=int, default=0)
+    learn.add_argument("--quick", action="store_true", help="skip the horizon and capacity studies")
+    learn.set_defaults(handler=command_learn)
 
     everything = subparsers.add_parser("all", parents=[common], help="bench + robustness + animate")
     everything.add_argument("--grid", type=int, default=13)

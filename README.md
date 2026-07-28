@@ -1,12 +1,13 @@
 # Inverted Pendulum Control Lab
 
-A cart-pole simulator that pits **PID**, **LQR**, **MPC** and an **energy-shaping swing-up** controller
-against each other on the same plant, the same actuator limit and the same scenarios, and scores them
-with objective metrics.
+A cart-pole simulator that pits **PID**, **LQR**, **MPC**, an **energy-shaping swing-up** controller
+and two **learned policies** against each other on the same plant, the same actuator limit, the same
+scenarios and the same objective, and scores them with objective metrics.
 
 Everything is derived and implemented from scratch in NumPy: the equations of motion, the analytic
-linearisation, the matrix exponential, both Riccati solvers and the MPC quadratic program. **SciPy is
-not a dependency** — none of the control mathematics is hidden behind a library call.
+linearisation, the matrix exponential, both Riccati solvers, the MPC quadratic program and the
+reinforcement learning. **Neither SciPy nor PyTorch is a dependency** — none of the mathematics is
+hidden behind a library call.
 
 [![tests](https://github.com/yongjunmun/Inverted-Pendulum/actions/workflows/ci.yml/badge.svg)](https://github.com/yongjunmun/Inverted-Pendulum/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
@@ -95,6 +96,106 @@ real rig, that says spend your calibration effort on geometry, not on the scale.
 
 ![Control effort versus accuracy](results/effort.png)
 
+## Learning-based control
+
+Run with `python -m cartpole.cli learn`.
+
+Most cart-pole RL projects cannot be compared to classical control, because they use a different
+plant, a different reward and a different time step from the baselines they are implicitly beating.
+Here the learned policies optimise **exactly the cost the Riccati equation minimises**,
+$r_t = -(e^\top Q e + R u^2)\,\mathrm{d}t$, with the same $Q$ and $R$ used to design the LQR — so any
+difference is attributable to the *method*, not to the two controllers chasing different goals.
+
+Two derivative-free algorithms are implemented from scratch: **ARS**
+(Mania et al. 2018) and the **Cross-Entropy Method**. Both train a *linear* policy $u = w \cdot s$,
+which is deliberate: that lives in the same parameter space as the LQR law $u = -Ks$, so the learned
+solution can be compared against the analytic one directly rather than only through episode returns.
+
+### Random search rediscovers the LQR gain
+
+![Learned gains versus the analytic LQR gain](results/learned_gains.png)
+
+| | Score | Cosine similarity vs $K$ | Stabilising | Scenarios | 60 s drift | Samples |
+|---|---:|---:|:---:|:---:|---:|---:|
+| **LQR** (analytic) | **−4.43** | 1.0000 | yes | 4/4 | 0.000 m | **0** |
+| ARS | −4.64 | **0.9918** | yes | 4/4 | 0.000 m | 800,000 |
+| CEM | −4.68 | 0.9908 | yes | 4/4 | 0.000 m | 1,600,000 |
+| do-nothing | −1014.31 | — | no | 0/4 | — | 0 |
+
+```
+ARS learned gain   [-18.15, -23.08, -83.77, -22.40]
+LQR analytic gain  [ -8.66, -10.33, -59.09, -11.18]
+```
+
+The directions agree to four decimal places; the magnitudes differ by 1.49×. That is expected and is
+why **cosine similarity is the honest metric here** — with a saturating actuator a policy can scale
+its weights up and behave almost identically, so magnitude carries little information.
+
+The cost of getting there is the point. ARS needed **800,000 environment steps** to approximate what
+one Riccati solve produces exactly, in closed form, with a stability certificate attached.
+
+![Learning curves against the LQR reference](results/learning_curves.png)
+
+### Capacity: does a neural policy help?
+
+Same algorithm, same budget, same reward. Only the function class changes.
+
+| Policy | Parameters | Score | Scenarios |
+|---|---:|---:|:---:|
+| Linear | **4** | **−4.64** | **4/4** |
+| MLP 16×16 | 369 | −30.72 | 0/4 |
+
+The 369-parameter network is **6.6× worse** and fails every scenario. On a problem whose optimal
+solution is provably linear, capacity buys nothing and costs sample efficiency. Reporting this rather
+than quietly dropping it is the difference between an experiment and a demo.
+
+### Four things that went wrong first
+
+Every one of these was a real failure that the classical baseline exposed:
+
+**1. Search scale.** Seeded at the conventional $\sigma = 1$, both algorithms returned policies at
+**5% of the required gain magnitude** and cosine similarity 0.46. The optimal gain has entries near 59;
+probing with unit noise explores essentially nothing. Fixed by scaling the search to the parameters
+being searched for.
+
+**2. Elite fraction.** CEM at the textbook 0.2 collapsed its sampling distribution early — cosine 0.77,
+**1/4 scenarios**. Keeping half the population instead: cosine 0.99, **4/4**, no other change.
+
+**3. Distribution coverage.** ARS failed the `tracking` scenario outright while passing everything
+else. It had been trained with cart offsets up to 0.1 m and was being asked to move 1 m. Widening the
+training distribution to 1.5 m fixed it with no change to the algorithm.
+
+**4. Reward sign trap.** Every reward here is negative, so an agent that crashes early accumulates
+*less* negative reward and scores *better* than one that survives. Without an explicit failure
+penalty, random search reliably learns to crash on purpose. There is a regression test for this.
+
+### The horizon trap
+
+**A reward cannot penalise a mode slower than its own episode.**
+
+![Training horizon versus detectable instability](results/horizon_study.png)
+
+| Training episode | Worst closed-loop pole | Unstable time constant | Cart drift over 60 s |
+|---:|---:|---:|---:|
+| **4.0 s** | **+0.0926** | 10.8 s | **35.82 m** |
+| **6.0 s** | **+0.0505** | 19.8 s | **2.61 m** |
+| 10.0 s | −0.0139 | stable | 0.06 m |
+| 20.0 s | −0.0611 | stable | 0.00 m |
+
+The relationship is monotonic: the longer the episode, the slower the mode the reward can still see.
+
+The 4 s policy scored near-optimal and looked fine. Its closed-loop eigenvalues did not: a pole at
+**+0.093**, a 10.8 s time constant, entirely invisible inside a 4 s episode. Over a 60 s run it held
+the pole at 1.8° while walking the cart **35.8 metres** off the rail.
+
+No amount of reward-curve inspection catches that. One `eig(A - BK)` call does, instantly. That is
+the argument for keeping classical analysis in the loop even when the controller is learned — and it
+is why the gain comparison above reports *stabilising: yes/no* alongside the score.
+
+This effect needs a narrow start distribution as well as a short horizon; under the tuned defaults
+every episode length converges to a stabilising gain. The study pins both conditions so the horizon is
+the only variable.
+
 ## The controllers
 
 | | Idea | Where it lives |
@@ -103,6 +204,7 @@ real rig, that says spend your calibration effort on geometry, not on the scale.
 | **LQR** | Analytic linearisation about upright, continuous-time Riccati equation solved via the stable invariant subspace of the Hamiltonian matrix. | [`controllers/lqr.py`](cartpole/controllers/lqr.py) |
 | **MPC** | Zero-order-hold discretisation, cost condensed onto the input sequence, box-constrained QP solved with FISTA, terminal weight from the discrete Riccati equation. Warm-started each step. | [`controllers/mpc.py`](cartpole/controllers/mpc.py) |
 | **Swing-up** | Energy shaping with collocated partial feedback linearisation, then an LQR catch gated on the Lyapunov value function $e^\top P e$. | [`controllers/swingup.py`](cartpole/controllers/swingup.py) |
+| **ARS / CEM** | Derivative-free reinforcement learning. Augmented Random Search and the Cross-Entropy Method train a linear policy on the negated LQR cost. | [`learning/trainers.py`](cartpole/learning/trainers.py) |
 
 Two details worth pointing at:
 
@@ -130,7 +232,7 @@ where $l = L/2$ and $J = m l^2 + mL^2/12$. Integrated with RK4 at 1 kHz while co
 
 ## How it is verified
 
-53 unit tests, run on Python 3.10-3.13 in CI. The interesting ones check the *mathematics*, not just
+71 unit tests, run on Python 3.10-3.13 in CI. The interesting ones check the *mathematics*, not just
 that the code runs:
 
 | Test | What it proves |
@@ -145,6 +247,11 @@ that the code runs:
 | Short horizon (N = 8) still stabilises | The terminal cost, not horizon length, is what buys stability |
 | Metrics on synthetic signals | The scoring code cannot flatter a controller |
 | CI workflow command vs. the CLI parser | The command in `ci.yml` is parsed by the real argument parser, so the workflow cannot drift out of sync with the code |
+| Loading $-K$ into the linear policy reproduces the LQR exactly | The learned and analytic controllers really are the same function class, so comparing them is valid |
+| Cosine similarity is scale-invariant | A gain scaled 2.5× still scores 1.0000, confirming the metric measures direction not magnitude |
+| An early crash scores worse than surviving | The negative-reward trap that would otherwise teach the agent to crash on purpose |
+| Training is reproducible from a seed | Learning results in the table can actually be re-derived |
+| Importing `cartpole.learning` without Gymnasium | The core stays dependency-free; the RL library adapter is strictly opt-in |
 
 CI additionally re-runs the whole benchmark and fails the build if any of the 13 runs stops
 stabilising, so the results table can never silently go stale.
@@ -161,6 +268,7 @@ python run.py                         # simplest: open run.py in an editor and p
 python -m cartpole.cli bench          # scenario suite, plots, results table
 python -m cartpole.cli robustness     # 169-plant mismatch sweep (~3 min)
 python -m cartpole.cli animate        # swing-up GIF
+python -m cartpole.cli learn          # train ARS/CEM, compare to the LQR gain (~5 min)
 python -m cartpole.cli all            # all of the above into results/
 
 python -m unittest discover -s tests -t . -v
@@ -200,8 +308,9 @@ cartpole/
   plotting.py         time histories, phase portraits, effort bars, robustness maps
   animate.py          GIF export
   cli.py              command line entry point
-  controllers/        pid.py, lqr.py, mpc.py, swingup.py
-tests/                53 unit tests
+  controllers/        pid.py, lqr.py, mpc.py, swingup.py, learned.py
+  learning/           policies, ARS + CEM trainers, gain analysis, optional Gymnasium env
+tests/                71 unit tests
 results/              committed figures and benchmark.csv
 ```
 
@@ -218,12 +327,21 @@ Stated plainly, because a simulation result is not a hardware result:
 - **The noise model is white Gaussian.** No bias, drift, dropouts or latency.
 - **The robustness study varies two parameters.** Friction, actuator dynamics and delay are held at
   nominal, so 84.6% is an optimistic figure, not a certificate.
+- **The learned policies are linear and trained only about upright.** They cannot swing up, and
+  nothing here claims deep RL would not do better on a harder task — only that on *this* task, whose
+  optimal solution is linear, a 369-parameter network was measurably worse.
+- **Learning is trained on a coarser model than it is scored on.** Training integrates at 50 Hz for
+  speed; every reported number comes from re-scoring on the full 1 kHz simulator, but the policies
+  never saw that fidelity during training.
+- **No sim-to-real transfer is claimed.** The learned policies were not domain-randomised, so they
+  would be expected to degrade on the mismatch grid the classical controllers were tested against.
 
 ## Next steps
 
 Luenberger observer and Kalman filter for output feedback, nonlinear MPC over the true dynamics,
-a friction-and-delay term to shrink the robustness gap honestly, and a hardware-in-the-loop harness
-so the same controller code can drive a real rig.
+a friction-and-delay term to shrink the robustness gap honestly, domain-randomised training so the
+learned policies can be scored on the same mismatch grid as the classical ones, and a
+hardware-in-the-loop harness so the same controller code can drive a real rig.
 
 ## License
 
