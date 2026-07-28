@@ -1,0 +1,4 @@
+# Runtime dependencies. SciPy is deliberately not used: the matrix exponential,
+# the Riccati solvers and the QP solver are implemented in cartpole/linalg.py.
+numpy>=1.24
+matplotlib>=3.7

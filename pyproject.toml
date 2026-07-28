@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inverted-pendulum-control-lab"
+version = "1.0.0"
+description = "Cart-pole simulator with PID, LQR, MPC and energy swing-up controllers, benchmarked side by side"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "matplotlib>=3.7"]
+
+[project.scripts]
+cartpole = "cartpole.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cartpole*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
