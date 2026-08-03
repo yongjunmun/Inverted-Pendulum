@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -28,7 +29,16 @@ from cartpole.metrics import to_markdown_table
 from cartpole.plotting import plot_effort, plot_phase, plot_robustness, plot_scenario
 from cartpole.scenarios import all_scenarios
 
+if TYPE_CHECKING:
+    from cartpole.learning.experiments import LearningResult
+
 DEFAULT_RESULTS = Path(__file__).resolve().parent.parent / "results"
+
+# Regression floors for `learn --check`. The recorded run reaches cosine 0.9918
+# (ARS) and 0.9908 (CEM), 4/4 scenarios and 0.000 m drift; these sit far enough
+# below that a stochastic search does not go red on sampling noise alone.
+MIN_COSINE_SIMILARITY = 0.95
+MAX_LONG_RUN_DRIFT_M = 0.5
 
 
 def _describe_design(params: CartPoleParams) -> str:
@@ -155,6 +165,36 @@ def command_learn(args: argparse.Namespace) -> None:
 
     print(f"\nWrote learning figures to {results_dir}")
 
+    if getattr(args, "check", False):
+        failures = _learning_regressions(results)
+        if failures:
+            raise SystemExit("regression: " + "; ".join(failures))
+
+
+def _learning_regressions(results: list[LearningResult]) -> list[str]:
+    """Every way a trained policy failed to reproduce the recorded headline result."""
+    failures = []
+    for result in results:
+        name = result.algorithm
+        comparison = result.comparison
+        if comparison is None:
+            failures.append(f"{name}: no gain comparison (policy is not linear)")
+        else:
+            if comparison.cosine_similarity < MIN_COSINE_SIMILARITY:
+                failures.append(
+                    f"{name}: cosine {comparison.cosine_similarity:.4f} < {MIN_COSINE_SIMILARITY}"
+                )
+            if not comparison.is_stabilising:
+                failures.append(f"{name}: learned gain is not stabilising")
+        expected = len(result.metrics)
+        if result.scenarios_passed < expected:
+            failures.append(f"{name}: {result.scenarios_passed}/{expected} scenarios")
+        if result.long_run_drift_m > MAX_LONG_RUN_DRIFT_M:
+            failures.append(
+                f"{name}: 60 s drift {result.long_run_drift_m:.3f} m > {MAX_LONG_RUN_DRIFT_M} m"
+            )
+    return failures
+
 
 def command_all(args: argparse.Namespace) -> None:
     command_bench(args)
@@ -190,6 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learn.add_argument("--seed", type=int, default=0)
     learn.add_argument("--quick", action="store_true", help="skip the horizon and capacity studies")
+    learn.add_argument(
+        "--check", action="store_true", help="exit non-zero if a learned policy regresses against the LQR gain"
+    )
     learn.set_defaults(handler=command_learn)
 
     everything = subparsers.add_parser("all", parents=[common], help="bench + robustness + animate")
